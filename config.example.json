@@ -1,0 +1,17 @@
+{
+  "scan_interval": 20,
+  "scan_timeout": 8,
+  "scan_use_tty": false,
+  "presence_ttl": 120,
+  "info_refresh_interval": 300,
+  "alarm_enabled": true,
+  "alarm_away_threshold": 300,
+  "alarm_flash_seconds": 6,
+  "alarm_beep": false,
+  "log_path": "btmon.log",
+  "tracked_devices": [],
+  "hidden_devices": [],
+  "cache_path": "btmon.cache.json",
+  "cache_ttl": 86400,
+  "oui_path": ""
+}

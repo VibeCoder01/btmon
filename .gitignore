@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+env/
+.env
+
+btmon.log
+btmon.cache.json
+config.json
+*.log
+*.cache.json
