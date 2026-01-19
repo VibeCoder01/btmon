@@ -128,7 +128,7 @@ def is_noise_device(mac, info):
 def is_noise_assessed(info):
     if not info:
         return False
-    return bool(info.get("name"))
+    return bool(info.get("name") or info.get("alias"))
 
 
 def is_valid_mac(mac):
@@ -532,6 +532,8 @@ def is_unfriendly_name(name, mac):
     if not value:
         return True
     lower = value.lower()
+    if lower.startswith("manufacturerdata"):
+        return True
     if lower.startswith("rssi") or ("rssi" in lower and "alias" in lower):
         return True
     if lower.startswith("txpower") or lower.startswith("tx power"):
@@ -552,6 +554,8 @@ def sanitize_name(value):
         return ""
     cleaned = value.strip()
     lower = cleaned.lower()
+    if lower.startswith("manufacturerdata"):
+        return ""
     if lower.startswith("rssi:"):
         return ""
     if lower.startswith("txpower:") or lower.startswith("tx power:"):
@@ -663,9 +667,6 @@ def record_noise_event(
 ):
     noise_events.append((timestamp, mac))
     noise_history.append(timestamp)
-    label = name or "-"
-    detail = source or "noise"
-    write_log(log_path, "noise", mac, label, rssi or "", detail)
 
 
 def prune_noise_events(noise_events, now, window_seconds=NOISE_RATE_WINDOW_SECONDS):
