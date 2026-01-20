@@ -82,6 +82,12 @@ MAC_IN_LINE_RE = re.compile(r"Device ([0-9A-Fa-f:]{17})")
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 MAC_RE = re.compile(r"^[0-9A-Fa-f:]{17}$")
 MAC_NAME_STRIP_RE = re.compile(r"[-: ]+")
+INFO_WARNING_RE = re.compile(r"^([0-9A-Fa-f:]{17})\s*:\s*(.*)$")
+MAC_DISPLAY_MODES = ("show", "none")
+MAC_DISPLAY_STATUS = {
+    "show": "MAC addresses visible.",
+    "none": "MAC addresses not displayed.",
+}
 
 
 def normalize_mac(mac):
@@ -99,6 +105,33 @@ def format_mac_blocks(mac):
     if len(compact) != 12:
         return mac or "-"
     return f"{compact[:6]}:{compact[6:]}"
+
+
+def display_mac_value(mac, display_mode, compact=False):
+    if not mac or mac == "-":
+        return "-"
+    if display_mode == "show":
+        return format_mac_blocks(mac) if compact else mac
+    return ""
+
+
+def mac_label_for_message(mac, display_mode):
+    value = display_mac_value(mac, display_mode)
+    return value if value else "MAC address"
+
+
+def mac_label_for_prompt(mac, display_mode):
+    value = display_mac_value(mac, display_mode)
+    return value if value else "not displayed"
+
+
+def parse_info_warning(error):
+    if not error:
+        return "", ""
+    match = INFO_WARNING_RE.match(error.strip())
+    if match:
+        return normalize_mac(match.group(1)), match.group(2).strip()
+    return "", error.strip()
 
 
 def normalize_oui_prefix(value):
@@ -1038,6 +1071,7 @@ def main(stdscr, config_path):
     status_message = ""
     status_until = 0.0
     show_logs = False
+    mac_display_mode = "none"
     log_cache = []
     log_cache_mac = ""
     log_cache_time = 0.0
@@ -1047,7 +1081,8 @@ def main(stdscr, config_path):
     device_scroll = 0
     alarm_active = False
     alarm_intense_until = 0.0
-    alarm_message = ""
+    alarm_trigger_mac = ""
+    alarm_trigger_label = ""
     alarm_next_siren = 0.0
     alarm_next_beep = 0.0
     config_page_size = 1
@@ -1221,7 +1256,10 @@ def main(stdscr, config_path):
                     else:
                         config_error = None
                         if len(removed_tracked) == 1:
-                            status_message = f"Removed noise tracked {removed_tracked[0]}."
+                            status_message = (
+                                "Removed noise tracked "
+                                f"{mac_label_for_message(removed_tracked[0], mac_display_mode)}."
+                            )
                         else:
                             status_message = f"Removed noise tracked MACs: {len(removed_tracked)}."
                     status_until = time.time() + 4
@@ -1294,14 +1332,18 @@ def main(stdscr, config_path):
                     else:
                         config_error = None
                         if len(removed_tracked) == 1:
-                            status_message = f"Removed noise tracked {removed_tracked[0]}."
+                            status_message = (
+                                "Removed noise tracked "
+                                f"{mac_label_for_message(removed_tracked[0], mac_display_mode)}."
+                            )
                         else:
                             status_message = f"Removed noise tracked MACs: {len(removed_tracked)}."
                     status_until = time.time() + 4
                 if errors:
                     timestamp = dt.datetime.now().strftime("%H:%M:%S")
                     for error in errors:
-                        info_warnings.append(f"{timestamp} {error}")
+                        mac, detail = parse_info_warning(error)
+                        info_warnings.append((timestamp, mac, detail))
         except queue.Empty:
             pass
 
@@ -1336,7 +1378,8 @@ def main(stdscr, config_path):
                         and (now - last_away) >= config["alarm_away_threshold"]
                     ):
                         alarm_active = True
-                        alarm_message = f"ALARM TRIGGERED by {label or mac}"
+                        alarm_trigger_label = label
+                        alarm_trigger_mac = mac
                         alarm_intense_until = max(
                             alarm_intense_until,
                             now + ALARM_INTENSE_SECONDS,
@@ -1422,7 +1465,14 @@ def main(stdscr, config_path):
             )
 
         if alarm_active and not alarm_intense and int(now * 2) % 2 == 0:
-            alert = alarm_message or "ALARM TRIGGERED"
+            trigger_text = alarm_trigger_label or display_mac_value(
+                alarm_trigger_mac, mac_display_mode
+            )
+            alert = (
+                f"ALARM TRIGGERED by {trigger_text}"
+                if trigger_text
+                else "ALARM TRIGGERED"
+            )
             stdscr.addstr(
                 2,
                 0,
@@ -1536,27 +1586,6 @@ def main(stdscr, config_path):
                     stdscr.addstr(row, col_x, "#" * fill_len)
         else:
             line = 3
-            header_title = f"Devices (filter: {device_filter})"
-            stdscr.addstr(
-                line,
-                0,
-                header_title[: width - 1],
-                curses.A_UNDERLINE | header_color,
-            )
-            line += 1
-            header = (
-                f"{'1 MAC':<13} | {'2 Label/Name':<25} | {'3 Seen':<9} | "
-                f"{'4 Age':<5} | {'5 RSS':<5} | {'6 Icon':<10} | {'7 Vendor':<12} | "
-                f"{'8 Alm':<5} | {'9 State':<7}"
-            )
-            stdscr.addstr(
-                line,
-                0,
-                header[: width - 1],
-                header_color,
-            )
-            line += 1
-
             device_items = [
                 item
                 for item in known_devices.items()
@@ -1598,6 +1627,34 @@ def main(stdscr, config_path):
                     reverse=sort_reverse,
                 )
             device_count = len(device_items)
+            header_title = f"Devices (filter: {device_filter}, count: {device_count})"
+            stdscr.addstr(
+                line,
+                0,
+                header_title[: width - 1],
+                curses.A_UNDERLINE | header_color,
+            )
+            line += 1
+            mac_column = mac_display_mode != "none"
+            if mac_column:
+                header = (
+                    f"{'1 MAC':<13} | {'2 Label/Name':<25} | {'3 Seen':<9} | "
+                    f"{'4 Age':<5} | {'5 RSS':<5} | {'6 Icon':<10} | {'7 Vendor':<12} | "
+                    f"{'8 Alm':<5} | {'9 State':<7}"
+                )
+            else:
+                header = (
+                    f"{'2 Label/Name':<25} | {'3 Seen':<9} | {'4 Age':<5} | "
+                    f"{'5 RSS':<5} | {'6 Icon':<10} | {'7 Vendor':<12} | "
+                    f"{'8 Alm':<5} | {'9 State':<7}"
+                )
+            stdscr.addstr(
+                line,
+                0,
+                header[: width - 1],
+                header_color,
+            )
+            line += 1
             device_mac_set = {mac for mac, _info in device_items}
             selected_macs.intersection_update(device_mac_set)
             bottom_reserved = 3
@@ -1667,12 +1724,19 @@ def main(stdscr, config_path):
                             and (now - last_away) >= config["alarm_away_threshold"]
                         ):
                             state = "away*"
-                display_mac = format_mac_blocks(mac)
-                row = (
-                    f"{display_mac:<13} | {display_text:<25.25} | {format_timestamp(last_seen):<9} | "
-                    f"{format_age(age):<5} | {rssi:<5} | {icon:<10.10} | {vendor:<12.12} | "
-                    f"{alarm_flag:<5} | {state:<7}"
-                )
+                display_mac = display_mac_value(mac, mac_display_mode, compact=True)
+                if mac_column:
+                    row = (
+                        f"{display_mac:<13} | {display_text:<25.25} | {format_timestamp(last_seen):<9} | "
+                        f"{format_age(age):<5} | {rssi:<5} | {icon:<10.10} | {vendor:<12.12} | "
+                        f"{alarm_flag:<5} | {state:<7}"
+                    )
+                else:
+                    row = (
+                        f"{display_text:<25.25} | {format_timestamp(last_seen):<9} | "
+                        f"{format_age(age):<5} | {rssi:<5} | {icon:<10.10} | {vendor:<12.12} | "
+                        f"{alarm_flag:<5} | {state:<7}"
+                    )
                 is_selected = (device_scroll + idx) == selected_index
                 is_marked = mac in selected_macs
                 style = multi_select_color if is_marked else curses.A_NORMAL
@@ -1710,8 +1774,11 @@ def main(stdscr, config_path):
                     if tracked:
                         state = "present" if device_state[mac]["present"] else "away"
                     vendor = lookup_oui_vendor(mac, oui_registry) or "-"
+                    display_selected_mac = mac_label_for_prompt(
+                        mac, mac_display_mode
+                    )
                     detail_lines = [
-                        f"Selected: {mac}  Tracked: {tracked_flag}  Alarm: {alarm_flag}  State: {state}",
+                        f"MAC: {display_selected_mac}  Tracked: {tracked_flag}  Alarm: {alarm_flag}  State: {state}",
                         f"Seen: {format_timestamp(last_seen)} ({format_age(seen_age)})  RSSI: {info.get('rssi') or '-'}",
                         f"Info: {format_timestamp(last_info)} ({format_age(info_age)})",
                         f"Label: {label}  Name: {name}  Alias: {alias}",
@@ -1781,13 +1848,18 @@ def main(stdscr, config_path):
                         curses.A_UNDERLINE | header_color,
                     )
                     line += 1
-                    for warning in list(info_warnings)[-3:]:
+                    for timestamp, mac, detail in list(info_warnings)[-3:]:
                         if line >= height - bottom_reserved:
                             break
+                        warning_text = f"{timestamp} {detail}"
+                        if mac:
+                            mac_text = display_mac_value(mac, mac_display_mode)
+                            if mac_text:
+                                warning_text = f"{timestamp} {mac_text} {detail}"
                         stdscr.addstr(
                             line,
                             0,
-                            warning[: width - 1],
+                            warning_text[: width - 1],
                             warn_color,
                         )
                         line += 1
@@ -1827,7 +1899,7 @@ def main(stdscr, config_path):
         )
         keys_line2 = (
             "      f filter, up/down select, space select, t track, e edit, "
-            "d delete, a alarm, h hide, l logs"
+            "d delete, a alarm, h hide, m macs, l logs"
         )
         if footer_lines == 2:
             stdscr.addstr(height - 2, 0, keys_line1[: width - 1])
@@ -1852,7 +1924,8 @@ def main(stdscr, config_path):
             if alarm_active:
                 alarm_active = False
                 alarm_intense_until = 0.0
-                alarm_message = ""
+                alarm_trigger_mac = ""
+                alarm_trigger_label = ""
                 alarm_next_siren = 0.0
                 alarm_next_beep = 0.0
                 status_message = "Alarm acknowledged."
@@ -1902,6 +1975,15 @@ def main(stdscr, config_path):
             continue
         if key in (ord("l"), ord("L")):
             show_logs = not show_logs
+        if key in (ord("m"), ord("M")):
+            current_index = MAC_DISPLAY_MODES.index(mac_display_mode)
+            mac_display_mode = MAC_DISPLAY_MODES[
+                (current_index + 1) % len(MAC_DISPLAY_MODES)
+            ]
+            status_message = MAC_DISPLAY_STATUS.get(
+                mac_display_mode, "MAC display updated."
+            )
+            status_until = time.time() + 2
         if key in (ord("f"), ord("F")):
             if view_mode == "config":
                 status_message = "Filter toggle not available in config view."
@@ -1953,9 +2035,12 @@ def main(stdscr, config_path):
                         else:
                             config_error = None
                             if len(targets) == 1 and skipped == 0:
+                                mac_text = mac_label_for_message(
+                                    last_mac, mac_display_mode
+                                )
                                 status_message = (
                                     f"Alarm {'enabled' if not last_current else 'disabled'} "
-                                    f"for {last_mac}."
+                                    f"for {mac_text}."
                                 )
                             else:
                                 suffix = "device" if toggled == 1 else "devices"
@@ -1995,7 +2080,10 @@ def main(stdscr, config_path):
                     else:
                         config_error = None
                         if len(targets) == 1:
-                            status_message = f"{last_mac} {last_action}."
+                            mac_text = mac_label_for_message(
+                                last_mac, mac_display_mode
+                            )
+                            status_message = f"{mac_text} {last_action}."
                         else:
                             status_message = f"Hidden {hidden_count}, shown {shown_count}."
                     status_until = time.time() + 3
@@ -2104,7 +2192,8 @@ def main(stdscr, config_path):
             else:
                 config_error = None
                 if len(targets) == 1:
-                    status_message = f"{last_mac} {last_action}."
+                    mac_text = mac_label_for_message(last_mac, mac_display_mode)
+                    status_message = f"{mac_text} {last_action}."
                 else:
                     status_message = (
                         f"Tracked {tracked_count}, untracked {untracked_count}."
@@ -2177,7 +2266,8 @@ def main(stdscr, config_path):
                 label_input = prompt_input(
                     stdscr, f"Label (blank keeps '{info.get('label') or info.get('name') or ''}'): "
                 )
-                mac_input = prompt_input(stdscr, f"MAC (blank keeps {mac}): ")
+                mac_display = mac_label_for_prompt(mac, mac_display_mode)
+                mac_input = prompt_input(stdscr, f"MAC (blank keeps {mac_display}): ")
                 new_mac = mac
                 if mac_input:
                     mac_input = normalize_mac(mac_input)
@@ -2212,7 +2302,9 @@ def main(stdscr, config_path):
                     status_message = f"Save failed: {error}"
                 else:
                     config_error = None
-                    status_message = f"Updated {new_mac}."
+                    status_message = (
+                        f"Updated {mac_label_for_message(new_mac, mac_display_mode)}."
+                    )
                 status_until = time.time() + 4
                 pending_info_macs.add(new_mac)
         if key in (ord("d"), ord("D")):
@@ -2228,7 +2320,8 @@ def main(stdscr, config_path):
                 status_until = time.time() + 3
                 continue
             if len(targets) == 1:
-                prompt = f"Delete all records for {targets[0]}?"
+                mac_text = mac_label_for_message(targets[0], mac_display_mode)
+                prompt = f"Delete all records for {mac_text}?"
             else:
                 prompt = f"Delete all records for {len(targets)} devices?"
             if not prompt_confirm(stdscr, prompt):
@@ -2254,7 +2347,9 @@ def main(stdscr, config_path):
             else:
                 config_error = None
                 if len(targets) == 1:
-                    status_message = f"Deleted records for {targets[0]}."
+                    status_message = (
+                        f"Deleted records for {mac_label_for_message(targets[0], mac_display_mode)}."
+                    )
                 else:
                     status_message = f"Deleted records for {len(targets)} devices."
             status_until = time.time() + 4

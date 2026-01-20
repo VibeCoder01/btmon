@@ -36,7 +36,7 @@ Key bindings:
 
 - `q` quit
 - `r` scan now
-- `up/down` select a MAC in the devices list
+- `up/down` select a device in the devices list
 - `PageUp/PageDown` scroll the current list by a page
 - `space` toggle multi-select and move down
 - `t` toggle tracking for the selected device(s)
@@ -45,7 +45,8 @@ Key bindings:
 - `a` toggle alarm for the selected tracked device(s)
 - `h` hide/unhide the selected device(s)
 - `f` cycle device filter (normal/hidden/all)
-- `l` toggle recent log entries for the selected MAC
+- `l` toggle recent log entries for the selected device
+- `m` toggle MAC column display (show/not displayed)
 - `c` toggle the config view (scrollable list of config values)
 - `e` edits the highlighted config value while in config view
 - `n` toggle the noise graph view
@@ -79,5 +80,5 @@ Use `c` in the TUI to open the config view, then `up/down` to select and `e` to 
 ## Notes
 
 - The scanner uses `bluetoothctl --timeout <seconds> scan on`; if your BlueZ version does not support `--timeout`, it falls back to `timeout <seconds> bluetoothctl scan on`.
-- The "human" indicator is `PRESENT` if any tracked device is present within the TTL window.
+- MAC addresses are not displayed by default; press `m` to show or hide the MAC column.
 - For vendor lookup, use the included `oui.txt` or download the latest IEEE OUI list and set `oui_path` to the local file path.
